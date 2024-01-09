@@ -200,8 +200,13 @@ rm(merged_seurat)
 save.image(file = paste0(rdaDir,"merged_seurat_harmony.rda"))
 dataDir <- ("/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/data/week30/")
 rdaDir <- ("/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/data/week30/rda/")
+```
+
+
+```{r}
 load(file = paste0(rdaDir,"merged_seurat_harmony.rda"))
 ```
+
 
 ```{r}
 DimPlot(merged_seurat_harmony, reduction = "umap", label = TRUE)
@@ -227,8 +232,85 @@ table(Idents(merged_seurat_harmony))
 #annotate them :
 
 ```{r}
-
+# Find markers to enable cluster annotation (supplementary file)
+markers <- FindAllMarkers(merged_seurat_harmony, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) -> top10
+markers %>% group_by(cluster) %>% top_n(n = 20, wt = avg_log2FC) -> top20
+write.csv(top10, file = "top10.csv")
 ```
+
+
+
+```{r}
+dist_genotype <- merged_seurat_harmony@meta.data %>%
+                 group_by(seurat_clusters, mutation) %>%
+                 summarise(n = n())
+table(merged_seurat_harmony@meta.data$mutation)
+table(merged_seurat_harmony@meta.data$seurat_clusters)
+```
+
+```{r}
+ggplot(dist_genotype) +
+  aes(x = seurat_clusters,
+      y = n, fill = mutation) +
+  geom_bar(stat = "identity") + 
+  scale_fill_brewer(palette = 3) +
+  theme_classic()
+```
+
+```{r}
+dist_cellphase <- merged_seurat_harmony@meta.data %>%
+                 group_by(seurat_clusters, Phase) %>%
+                 summarise(n = n())
+```
+
+```{r}
+ggplot(dist_cellphase) +
+  aes(x = seurat_clusters,
+      y = n, fill = Phase) +
+  geom_bar(stat = "identity") + 
+  scale_fill_brewer(palette = 1) +
+  theme_classic()
+```
+
+##Renaming the idents based on the expression of some known markers 
+```{r}
+merged_seurat_harmony <- RenameIdents(object = merged_seurat_harmony,
+                                      '0' = "B cells", '1' = "T cells", 
+                                      '2' = "Resident-like Macrophages", 
+                                      '3' = "Inflamatory Macrophages", '4' = "Neutrophils",
+                                      '5' = "TRM2hi Macrophages", '6' = "T cells",
+                                      '7' = "Monocytes", '8' = "CXCR6+ T cells",
+                                      '9' = "Dendritic cells", '10' = "Mixed lymphocytes",
+                                      '11' = "Mixed Lymphocytes", '12' = "B cells", 
+                                      '13' = "Proliferatin T cells", '14' = "Proliferating T cells",
+                                      '15' = "B cells", '16' = "Vascular Fibroblasts"
+                                      )
+table(Idents(merged_seurat_harmony))
+```
+
+
+
+```{r}
+cellInfo <- merged_seurat_harmony@meta.data
+cellInfo$seurat_clusters <- Idents(merged_seurat_harmony)
+cellInfo$genotype_clusters <- paste(cellInfo$mutation,cellInfo$seurat_clusters,sep = "_")
+saveRDS(cellInfo, file = "./data/week30/rda/cellInfo.rds")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

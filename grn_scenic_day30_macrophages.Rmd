@@ -293,19 +293,24 @@ saveRDS(scenicOptions, file="int/scenicOptions.Rds")
 
 Once the thresholds are set store the binarized results in the seni settings
 
-```{r}
-scenicOptions <- readRDS(file = "int/scenicOptions.Rds")
-scenicOptions@inputDatasetInfo$cellInfo <- "int/cellInfo.Rds"
-scenicOptions@inputDatasetInfo$colVars <- "int/colVars.Rds"
-```
-
-
 
 
 ```{r}
 # scenicOptions@settings$devType="png"
 scenicOptions <- runSCENIC_4_aucell_binarize(scenicOptions)
 ```
+
+
+```{r}
+scenicOptions <- readRDS(file="./int/scenicOptions.Rds")
+exprMat_log <- exprMat_log <- log2(exprMat+1) 
+cellInfo <- readRDS(file = "./data/week30/rda/cellInfo.rds")
+saveRDS(cellInfo, file="int/cellInfo.rds")
+scenicOptions@inputDatasetInfo$cellInfo <- "int/cellInfo.Rds"
+```
+
+
+
 
 ##Clustering / Dimensionality reduction on regulon activity
 
@@ -327,7 +332,7 @@ The dataset has only  regulons : So to compare them
 ```{r}
 par(mfrow=c(length(nPcs), 3))
 fileNames <- paste0("int/",grep(".Rds", grep("tSNE_AUC", list.files("int"), value=T, perl = T), value=T))
-plotTsne_compareSettings(fileNames, scenicOptions, varName = "genotype" ,showLegend = T, cex=.5)
+plotTsne_compareSettings(fileNames, scenicOptions, varName = "genotype_clusters" ,showLegend = T, cex=.5)
 ```
 
 ```{r}
@@ -336,6 +341,9 @@ scenicOptions@settings$defaultTsne$dims <- 5
 scenicOptions@settings$defaultTsne$perpl <- 15
 saveRDS(scenicOptions, file="./int/scenicOptions.Rds")
 ```
+
+
+######Load scenic options from here without disturbing previous chunks of code 
 
 
 
@@ -445,7 +453,7 @@ library(AUCell)
 cellInfo <- data.frame(cellInfo)
 regulonAUC <- loadInt(scenicOptions, "aucell_regulonAUC")
 regulonAUC <- regulonAUC[onlyNonDuplicatedExtended(rownames(regulonAUC)),]
-regulonActivity_byCellType <- sapply(split(rownames(cellInfo), cellInfo$genotype),
+regulonActivity_byCellType <- sapply(split(rownames(cellInfo), cellInfo$genotype_clusters),
                                      function(cells) rowMeans(getAUC(regulonAUC)[,cells]))
 regulonActivity_byCellType_Scaled <- t(scale(t(regulonActivity_byCellType), center = T, scale=T))
 
@@ -458,7 +466,7 @@ ComplexHeatmap::Heatmap(regulonActivity_byCellType_Scaled, name="Regulon activit
 cellInfo <- data.frame(cellInfo)
 regulonAUC <- loadInt(scenicOptions, "aucell_regulonAUC")
 regulonAUC <- regulonAUC[onlyNonDuplicatedExtended(rownames(regulonAUC)),]
-regulonActivity_byCellType <- sapply(split(rownames(cellInfo), cellInfo$genotype),
+regulonActivity_byCellType <- sapply(split(rownames(cellInfo), cellInfo$genotype_clusters),
                                      function(cells) rowMeans(getAUC(regulonAUC)[,cells]))
 regulonActivity_byCellType_Scaled <- t(scale(t(regulonActivity_byCellType), center = T, scale=T))
 
@@ -500,7 +508,7 @@ Binarized version
 minPerc <- .7
 binaryRegulonActivity <- loadInt(scenicOptions, "aucell_binary_nonDupl")
 cellInfo_binarizedCells <- cellInfo[which(rownames(cellInfo)%in% colnames(binaryRegulonActivity)),, drop=FALSE]
-regulonActivity_byCellType_Binarized <- sapply(split(rownames(cellInfo_binarizedCells), cellInfo_binarizedCells$CellType), 
+regulonActivity_byCellType_Binarized <- sapply(split(rownames(cellInfo_binarizedCells), cellInfo_binarizedCells$genotype_clustersd), 
                                                function(cells) rowMeans(binaryRegulonActivity[,cells, drop=FALSE]))
 binaryActPerc_subset <- regulonActivity_byCellType_Binarized[which(rowSums(regulonActivity_byCellType_Binarized>minPerc)>0),]
 ComplexHeatmap::Heatmap(binaryActPerc_subset, name="Regulon activity (%)", col = c("white","pink","red"))
@@ -530,7 +538,7 @@ Cell-type specific regulators (based on the Regulon Specificity Score (RSS) prop
 
 ```{r}
 # regulonAUC <- loadInt(scenicOptions, "aucell_regulonAUC")
-rss <- calcRSS(AUC=getAUC(regulonAUC), cellAnnotation=cellInfo[colnames(regulonAUC), "genotype"])
+rss <- calcRSS(AUC=getAUC(regulonAUC), cellAnnotation=cellInfo[colnames(regulonAUC), "genotype_clusters"])
 rssPlot <- plotRSS(rss)
 plotly::ggplotly(rssPlot$plot)
 ```
