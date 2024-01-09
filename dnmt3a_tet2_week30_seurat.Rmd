@@ -1,0 +1,269 @@
+---
+title: "dnmt3a_tet2_mutated_week30"
+author: "Sanketh"
+date: "2024-01-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Setting the directory and load required packages  
+
+```{r}
+rm(list=ls())
+library(tidyverse)
+library(Seurat)
+library(ggplot2)
+library(stringr)
+#install.packages("Matrix")
+#library(Matrix)
+library(scCustomize)
+library(harmony)
+library(devtools)
+library(presto)
+library(DoubletFinder)
+library(Matrix)
+#devtools::install_github('immunogenomics/presto')
+#install.packages("remotes")
+#remotes::install_github("chris-mcginnis-ucsf/DoubletFinder")
+setwd("/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/")
+getwd()
+#Set the data dir to week 30 
+dataDir <- ("/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/data/week30/")
+rdaDir <- ("/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/data/week30/rda/")
+```
+
+
+```{r}
+read_counts <- function(file){
+  x <- readMM(file) %>%
+  as.matrix()
+  sample <- basename(file)
+  sample <- str_replace(sample, "_matrix.*", "")
+  genes_x <- read.table(file = paste0(dataDir,sample,"_genes.tsv.gz"), header = F, sep = "\t")
+  genes <- genes_x[,2]
+  #Be cautious while making the gene names unique 
+  gene_names <- make.unique(genes) #This is a built in function in r to make the gene names unique 
+  barcodes_x <- read.table(file = paste0(dataDir,sample,"_barcodes.tsv.gz"), header = F, sep = "\t")
+  barcodes <- paste0(barcodes_x[,1],"_",sample)
+  row.names(x) <- gene_names
+  colnames(x) <- barcodes 
+  return(x)
+}
+```
+
+```{r}
+read_barcodes <- function(file){
+  y <- read.table(file, header = F, sep = "\t") %>%
+    as.data.frame() %>%
+    rename(Cellbarcode = "V1")
+  sample <- basename(file)
+  sample <- str_replace(sample,"_barcodes.tsv.gz","")
+  barcode_metadata <- str_split(sample,pattern = "_") %>%
+    unlist() %>%
+    purrr::set_names(c("Sample_geo","week","mutation","type","subtype")) %>%
+    as.list()
+  y$sample_geo <- rep(barcode_metadata$Sample_geo,nrow(y))
+  y$week <- rep(barcode_metadata$week,nrow(y))
+  y$mutation <- rep(barcode_metadata$mutation,nrow(y))
+  y$genotype <- rep(paste(barcode_metadata$mutation,barcode_metadata$type,
+                           barcode_metadata$subtype, sep="_"),nrow(y))
+  return(y)
+}
+```
+
+
+
+# Basic function to convert human to mouse gene names
+
+```{r}
+convert_human_to_mouse <- function(gene_list){
+  
+  output = c()
+  
+  for(gene in gene_list){
+    class_key = (mouse_human_genes %>% filter(Symbol == gene & Common.Organism.Name=="human"))[['DB.Class.Key']]
+    if(!identical(class_key, integer(0)) ){
+      mouse_genes = (mouse_human_genes %>% filter(DB.Class.Key == class_key & Common.Organism.Name=="mouse, laboratory"))[,"Symbol"]
+      for(mouse_gene in mouse_genes){
+        output = append(output,mouse_gene)
+      }
+    }
+  }
+  
+  return (output)
+}
+```
+
+#Setting the cell cyle genes and converting the human to mouse genes  
+  
+```{r}
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+mouse_human_genes = read.csv("http://www.informatics.jax.org/downloads/reports/HOM_MouseHumanSequence.rpt",sep="\t")
+m.s.genes <- convert_human_to_mouse(cc.genes.updated.2019$s.genes)
+m.g2m.genes <- convert_human_to_mouse(cc.genes.updated.2019$g2m.genes)
+save.image(file = paste0(rdaDir,"cell_cycle_genes.rda"))
+```
+
+
+```{r}
+#Reading in the count matrices
+counts_files <- list.files(path = "./data/week30/", full.names = T, pattern = "*.mtx.gz")
+samples <- map_chr(counts_files,basename)
+samples <- str_replace(samples, "_matrix.*", "")
+names(counts_files) <- samples
+counts <- purrr::map(counts_files,read_counts) #Running now on all samples 
+```
+
+```{r}
+##Write code to create metadata for the cells : 
+barcode_files <- list.files (path = "./data/week30/", full.names = T, pattern = "*barcodes.tsv.gz")
+names(barcode_files) <- samples
+metadata_cells <- purrr::map(barcode_files,read_barcodes)
+```
+
+#Creating Seurat Object 
+```{r}
+library(Matrix)
+objs <- purrr::map2(counts, metadata_cells,
+                    ~CreateSeuratObject(counts = .x,
+                                        meta.data = .y,
+                                        )) #Can ignore the warning as Surat directly converts into sparse matrix which is req. 
+```
+
+```{r}
+merged_seurat <- purrr::reduce(objs, function(x,y) {merge(x,y)})
+#Once the merge is done the counts are not merged hence this needs to be 
+#to merge the counts from different samples into one counts layer 
+merged_seurat <- JoinLayers(merged_seurat)
+merged_seurat
+```
+
+# Filter, normalize, scale, linear dimensionality reduction
+```{r}
+# Filter, normalize, scale, linear dimensionality reduction
+merged_seurat[["percent.mt"]] <- PercentageFeatureSet(merged_seurat, pattern = "^mt-")
+plot1 <- FeatureScatter(merged_seurat, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(merged_seurat, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+```
+
+```{r}
+merged_seurat <- subset(merged_seurat, subset = nFeature_RNA > 200 & nFeature_RNA < 4400 & percent.mt < 15)
+merged_seurat <- Seurat::NormalizeData(merged_seurat, verbose = FALSE) %>% 
+  FindVariableFeatures(selection.method = "vst", nfeatures = 2000) %>%   
+  CellCycleScoring(g2m.features = m.g2m.genes,
+                   s.features = m.s.genes,
+                   set.ident = FALSE) %>% 
+  ScaleData(vars.to.regress = c("S.Score", "G2M.Score")) %>% 
+  RunPCA(pc.genes = merged_seurat@var.genes, npcs = 20, verbose = FALSE)
+
+ElbowPlot(merged_seurat)
+rm(counts,mouse_human_genes,barcode_files,
+   counts_files,g2m.genes,m.g2m.genes,m.s.genes,samples,
+   objs,s.genes,plot1,plot2)
+
+save.image(file = paste0(rdaDir,"merged_seurat_day30_filtered.rda"))
+###########Can directly start the workflow from here 
+load(file = paste0(rdaDir,"merged_seurat_day30_filtered.rda"))
+```
+
+```{r}
+# Run harmony integration
+merged_seurat_harmony <- merged_seurat %>%
+  RunHarmony("genotype")
+
+ElbowPlot(merged_seurat_harmony)
+
+merged_seurat_harmony <- RunUMAP(merged_seurat_harmony, reduction='harmony', 
+                                 dims = 1:8)
+merged_seurat_harmony <- FindNeighbors(merged_seurat_harmony, reduction='harmony', 
+                                       dims = 1:8)
+merged_seurat_harmony <- FindClusters(merged_seurat_harmony, resolution = 0.7)
+```
+
+
+```{r}
+# Doublet detection and removal
+sweep.list <- paramSweep(merged_seurat_harmony, PCs = 1:16)
+sweep.stats <- summarizeSweep(sweep.list)
+bcmvn <- find.pK(sweep.stats)
+nExp <- round(0.03*nrow(merged_seurat_harmony@meta.data)) 
+merged_seurat_doublets <- doubletFinder(merged_seurat_harmony, PCs = 1:8, pN = 0.25, pK = 0.09, nExp = nExp, reuse.pANN = FALSE, sct = FALSE)
+merged_seurat_harmony = merged_seurat_doublets[, merged_seurat_doublets@meta.data[, DF.classifications_0.25_0.09_510] == "Singlet"]
+merged_seurat_harmony = subset(x = merged_seurat_doublets, subset = DF.classifications_0.25_0.09_510 == "Singlet")
+rm(merged_seurat)
+save.image(file = paste0(rdaDir,"merged_seurat_harmony.rda"))
+dataDir <- ("/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/data/week30/")
+rdaDir <- ("/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/data/week30/rda/")
+load(file = paste0(rdaDir,"merged_seurat_harmony.rda"))
+```
+
+```{r}
+DimPlot(merged_seurat_harmony, reduction = "umap", label = TRUE)
+```
+
+
+
+
+```{r}
+DimPlot(merged_seurat_harmony, reduction = "umap", label = T, group.by = "genotype")
+```
+
+
+
+
+```{r}
+table(Idents(merged_seurat_harmony))
+```
+
+
+
+##FindMarkers : Find the differentially expressed genes in each of the different clusters to 
+#annotate them :
+
+```{r}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+##Subsetting seurat objects into 5 different objects based on their 
+#genotype to run SCENIC to see if there are any potential differnces 
+```{r}
+#To take a quick look at how many cells we have in each genotype 
+table(merged_seurat_harmony@meta.data$genotype)
+dnmt3a_45_1_seurat <- subset(x = merged_seurat_harmony, subset = genotype == "dnmt3a_45_1")
+#Quick chek if subsetting was done correctly 
+#table(dnmt3a_45_1_seurat@meta.data$genotype)
+dnmt3a_45_2_seurat <- subset(x = merged_seurat_harmony, subset = genotype == "dnmt3a_45_2")
+tet2_45_1_seurat <- subset(x = merged_seurat_harmony, subset = genotype == "tet2_45_1")
+tet2_45_2_seurat <- subset(x = merged_seurat_harmony, subset = genotype == "tet2_45_2")
+wt_45_1_seurat <- subset(x = merged_seurat_harmony, subset = genotype == "wt_45_1")
+rm(bcmvn,merged_seurat_doublets,merged_seurat_harmony,metadata_cells,sweep.stats,sweep.list)
+save.image(paste0(rdaDir,"seurat_objs_genotypes_noidents.rda")) #Can directly load this into the scenic pipeline to run scenic
+```
+
+```{r}
+#Idents(dnmt3a_45_1_seurat)
+```
+
+
+

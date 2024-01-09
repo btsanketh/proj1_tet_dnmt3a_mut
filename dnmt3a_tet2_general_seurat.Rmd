@@ -1,0 +1,385 @@
+---
+title: "dnmt3a_tet2_mutated_general"
+author: "Sanketh"
+date: "2024-01-02"
+output: html_document
+---
+
+# Setting the directory and load required packages  
+
+```{r}
+library(tidyverse)
+library(Seurat)
+library(ggplot2)
+library(stringr)
+#install.packages("Matrix")
+library(Matrix)
+library(scCustomize)
+library(harmony)
+library(devtools)
+library(presto)
+#devtools::install_github('immunogenomics/presto')
+setwd("/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/")
+getwd()
+dataDir <- ("/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/data/")
+```
+
+```{bash}
+cd ./data
+tar xvf GSE225773_RAW.tars
+rm GSE225773_RAW.tar
+```
+
+```{r}
+read_counts <- function(file){
+  x <- readMM(file) %>%
+  as.matrix()
+  sample <- basename(file)
+  sample <- str_replace(sample, "_matrix.*", "")
+  genes_x <- read.table(file = paste0(dataDir,sample,"_genes.tsv.gz"), header = F, sep = "\t")
+  genes <- genes_x[,2]
+  gene_names <- make.unique(genes) #This is a built in function in r to make the gene names unique 
+  barcodes_x <- read.table(file = paste0(dataDir,sample,"_barcodes.tsv.gz"), header = F, sep = "\t")
+  barcodes <- paste0(barcodes_x[,1],"_",sample)
+  row.names(x) <- gene_names
+  colnames(x) <- barcodes 
+  return(x)
+}
+```
+
+
+```{r}
+read_barcodes <- function(file){
+  y <- read.table(file, header = F, sep = "\t") %>%
+    as.data.frame() %>%
+    rename(Cellbarcode = "V1")
+  sample <- basename(file)
+  sample <- str_replace(sample,"_barcodes.tsv.gz","")
+  barcode_metadata <- str_split(sample,pattern = "_") %>%
+    unlist() %>%
+    purrr::set_names(c("Sample_geo","week","mutation","type","subtype")) %>%
+    as.list()
+  y$sample_geo <- rep(barcode_metadata$Sample_geo,nrow(y))
+  y$week <- rep(barcode_metadata$week,nrow(y))
+  y$mutation <- rep(barcode_metadata$mutation,nrow(y))
+  return(y)
+}
+```
+
+
+```{r}
+#Reading in all the count files 
+counts_files <- list.files(path = "./data/", full.names = T, pattern = "*.mtx.gz")
+samples <- map_chr(counts_files,basename)
+samples <- str_replace(samples, "_matrix.*", "")
+names(counts_files) <- samples
+counts <- purrr::map(counts_files,read_counts) #Running now on all samples 
+```
+
+```{r}
+##Write code to create metadata for the cells : 
+barcode_files <- list.files (path = "./data/", full.names = T, pattern = "*barcodes.tsv.gz")
+names(barcode_files) <- samples
+metadata_cells <- purrr::map(barcode_files,read_barcodes)
+```
+
+```{r}
+library(Matrix)
+objs <- purrr::map2(counts, metadata_cells,
+                    ~CreateSeuratObject(counts = .x,
+                                        meta.data = .y,
+                                        )) #Can ignore the warning as Surat directly converts into sparse matrix which is req. 
+```
+
+```{r}
+merged_seurat <- purrr::reduce(objs, function(x,y) {merge(x,y)})
+#Once the merge is done the counts are not merged hence this needs to be 
+#to merge the counts from different samples into one counts layer 
+merged_seurat <- JoinLayers(merged_seurat)
+merged_seurat
+```
+
+
+##Various steps based on the Seurat Workflow 
+
+#QC and selecting cells for further analysis 
+```{r}
+# The [[ operator can add columns to object metadata. This is a great place to stash QC stats
+merged_seurat[["percent.mt"]] <- PercentageFeatureSet(merged_seurat, pattern = "^Mt")
+```
+
+```{r}
+# Show QC metrics for the first 5 cells
+head(merged_seurat@meta.data, 5)
+#Check if we have percent.mt updated in the metadata : Be careful with the pattern 
+# MT_ or Mt or how the mitochondrial genes are named 
+#merged_seurat@meta.data %>% arrange(desc(percent.mt)) 
+```
+
+##Visulaizing the QC metrics to filter out the cells with : 
+1) More than 5% Mt reads
+2) That have unique feature counts over 2500 or less than 200
+
+```{r}
+# Visualize QC metrics as a violin plot
+VlnPlot(merged_seurat, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3,
+        pt.size = 0.1,
+        alpha = 1)
+VlnPlot_scCustom(merged_seurat, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"))
+
+```
+
+```{r}
+# FeatureScatter is typically used to visualize feature-feature relationships, but can be used
+# for anything calculated by the object, i.e. columns in object metadata, PC scores etc.
+
+plot1 <- FeatureScatter(merged_seurat, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(merged_seurat, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+```
+
+
+```{r}
+#Set these thresholds based on the data 
+merged_seurat <- subset(merged_seurat, subset = nFeature_RNA > 200 & nFeature_RNA < 3500 & percent.mt < 5)
+#Can run again to see of the QC metrics have improved from before 
+VlnPlot(merged_seurat, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3,
+        pt.size = 0.1,
+        alpha = 1)
+```
+
+
+##Normalizing the data 
+After removing unwanted cells from the dataset, the next step is to normalize the data. By default, we employ a global-scaling normalization method “LogNormalize” that normalizes the feature expression measurements for each cell by the total expression, multiplies this by a scale factor (10,000 by default), and log-transforms the result. In Seurat v5, Normalized values are stored in pbmc[["RNA"]]$data.
+
+```{r}
+merged_seurat <- NormalizeData(merged_seurat, normalization.method = "LogNormalize", scale.factor = 10000)
+```
+
+##Identification of highly varibale features
+#Check if this can be modified for better results 
+
+```{r}
+merged_seurat <- FindVariableFeatures(merged_seurat, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(merged_seurat), 10)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(merged_seurat)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1 + plot2
+```
+
+##Scaling data
+
+Next, we apply a linear transformation (‘scaling’) that is a standard pre-processing step prior to dimensional reduction techniques like PCA. The ScaleData() function:
+
+Shifts the expression of each gene, so that the mean expression across cells is 0
+Scales the expression of each gene, so that the variance across cells is 1
+This step gives equal weight in downstream analyses, so that highly-expressed genes do not dominate
+The results of this are stored in pbmc[["RNA"]]$scale.data
+By default, only variable features are scaled.
+You can specify the features argument to scale additional features
+
+
+```{r}
+all.genes <- rownames(merged_seurat)
+merged_seurat <- ScaleData(merged_seurat, features = all.genes)
+```
+
+
+
+##Perform linear dimension reduction 
+
+```{r}
+merged_seurat <- RunPCA(merged_seurat, features = VariableFeatures(object = merged_seurat))
+```
+
+##Ways to visualize the PCA 
+
+```{r}
+#Elbow plot to understand the variance across the PC's
+ElbowPlot(merged_seurat, ndims = 20, reduction = "pca")
+#Can chose 12 PC's
+```
+
+
+```{r}
+VizDimLoadings(merged_seurat, dims = 1:2, reduction = "pca")
+```
+
+```{r}
+set.seed(123)
+DimPlot(merged_seurat, reduction = "pca",group.by = "mutation")
+```
+
+```{r}
+DimHeatmap(merged_seurat, dims = 1:15, cells = 500, balanced = TRUE)
+```
+
+##Clustering the cells 
+
+Seurat applies a graph-based clustering approach, building upon initial strategies in (Macosko et al). Importantly, the distance metric which drives the clustering analysis (based on previously identified PCs) remains the same. However, our approach to partitioning the cellular distance matrix into clusters has dramatically improved. Our approach was heavily inspired by recent manuscripts which applied graph-based clustering approaches to scRNA-seq data [SNN-Cliq, Xu and Su, Bioinformatics, 2015] and CyTOF data [PhenoGraph, Levine et al., Cell, 2015]. Briefly, these methods embed cells in a graph structure - for example a K-nearest neighbor (KNN) graph, with edges drawn between cells with similar feature expression patterns, and then attempt to partition this graph into highly interconnected ‘quasi-cliques’ or ‘communities’.
+
+As in PhenoGraph, we first construct a KNN graph based on the euclidean distance in PCA space, and refine the edge weights between any two cells based on the shared overlap in their local neighborhoods (Jaccard similarity). This step is performed using the FindNeighbors() function, and takes as input the previously defined dimensionality of the dataset (first 10 PCs).
+
+To cluster the cells, we next apply modularity optimization techniques such as the Louvain algorithm (default) or SLM [SLM, Blondel et al., Journal of Statistical Mechanics], to iteratively group cells together, with the goal of optimizing the standard modularity function. The FindClusters() function implements this procedure, and contains a resolution parameter that sets the ‘granularity’ of the downstream clustering, with increased values leading to a greater number of clusters. We find that setting this parameter between 0.4-1.2 typically returns good results for single-cell datasets of around 3K cells. Optimal resolution often increases for larger datasets. The clusters can be found using the Idents() function.
+
+```{r}
+merged_seurat <- FindNeighbors(merged_seurat, dims = 1:10)
+merged_seurat <- FindClusters(merged_seurat, resolution = 0.5)
+```
+```{r}
+#Look at the cluster ids of the first 5 cells 
+head(Idents(merged_seurat), 5)
+```
+##Run non-linear dimensional reduction 
+
+Run non-linear dimensional reduction (UMAP/tSNE)
+Seurat offers several non-linear dimensional reduction techniques, such as tSNE and UMAP, to visualize and explore these datasets. The goal of these algorithms is to learn underlying structure in the dataset, in order to place similar cells together in low-dimensional space. Therefore, cells that are grouped together within graph-based clusters determined above should co-localize on these dimension reduction plots.
+
+While we and others have routinely found 2D visualization techniques like tSNE and UMAP to be valuable tools for exploring datasets, all visualization techniques have limitations, and cannot fully represent the complexity of the underlying data. In particular, these methods aim to preserve local distances in the dataset (i.e. ensuring that cells with very similar gene expression profiles co-localize), but often do not preserve more global relationships. We encourage users to leverage techniques like UMAP for visualization, but to avoid drawing biological conclusions solely on the basis of visualization techniques.
+
+
+```{r}
+merged_seurat <- RunUMAP(merged_seurat, dims = 1:10)
+```
+
+```{r}
+# note that you can set `label = TRUE` or use the LabelClusters function to help label
+# individual clusters
+#Good way to qc to make sure we dont have a cluster with only one sample 
+set.seed(123)
+DimPlot(merged_seurat, reduction = "umap", group.by = "sample_geo")
+DimPlot(merged_seurat, reduction = "umap")
+```
+
+
+##Finding differentially expressed markers in each cluster 
+
+Seurat can help you find markers that define clusters via differential expression (DE). By default, it identifies positive and negative markers of a single cluster (specified in ident.1), compared to all other cells. FindAllMarkers() automates this process for all clusters, but you can also test groups of clusters vs. each other, or against all cells.
+
+In Seurat v5, we use the presto package (as described here and available for installation here), to dramatically improve the speed of DE analysis, particularly for large datasets. For users who are not using presto, you can examine the documentation for this function (?FindMarkers) to explore the min.pct and logfc.threshold parameters, which can be increased in order to increase the speed of DE testing.
+```{r}
+#Find all markers of cluster 2 
+cluster2.markers <- FindMarkers(merged_seurat, ident.1 = 2)
+head(cluster2.markers, n = 5)
+#Can install presto for faster implementation of the findmarkers especially to run the wilcoxon test 
+```
+
+
+```{r}
+# find all markers distinguishing cluster 5 from clusters 0 and 3
+cluster5.markers <- FindMarkers(merged_seurat, ident.1 = 5, ident.2 = c(0, 3))
+head(cluster5.markers, n = 5)
+```
+
+##Find markers for every cluster compared to all remaning cells, report only the positive ones 
+
+```{r}
+# find markers for every cluster compared to all remaining cells, report only the positive
+# ones
+merged_seurat.markers <- FindAllMarkers(merged_seurat, only.pos = TRUE)
+merged_seurat.markers %>%
+    group_by(cluster) %>%
+    dplyr::filter(avg_log2FC > 1)
+```
+
+Seurat has several tests for differential expression which can be set with the test.use parameter (see our DE vignette for details). For example, the ROC test returns the ‘classification power’ for any individual marker (ranging from 0 - random, to 1 - perfect).
+
+```{r}
+cluster0.markers <- FindMarkers(merged_seurat, ident.1 = 0, logfc.threshold = 0.25, test.use = "roc", only.pos = TRUE)
+```
+
+We include several tools for visualizing marker expression. VlnPlot() (shows expression probability distributions across clusters), and FeaturePlot() (visualizes feature expression on a tSNE or PCA plot) are our most commonly used visualizations. We also suggest exploring RidgePlot(), CellScatter(), and DotPlot() as additional methods to view your dataset.
+
+```{r}
+#Plotting the expression of haematopoitic stem cell markers 
+VlnPlot(merged_seurat, features = c("CD90", "Cd34"))
+VlnPlot(merged_seurat, features = c("Ccr2", "Cd163"))
+```
+
+
+```{r}
+#Can plot the raw counts as well 
+VlnPlot(merged_seurat, features = c("Nkg7", "Cd8a"), slot = "counts", log = TRUE)
+```
+
+```{r}
+FeaturePlot(merged_seurat, features = c("Ms4a1", "Gnly", "Cd3e", "Cd14", "Fcre1a", "Fcrg3a", "Lyz", "Ppbp",
+    "Cd8a"))
+```
+
+DoHeatmap() generates an expression heatmap for given cells and features. In this case, we are plotting the top 20 markers (or all markers if less than 20) for each cluster.
+
+```{r}
+merged_seurat.markers %>%
+    group_by(cluster) %>%
+    dplyr::filter(avg_log2FC > 1) %>%
+    slice_head(n = 10) %>%
+    ungroup() -> top10
+DoHeatmap(merged_seurat, features = top10$gene)
+```
+##Final step before running scenic is to assign the cell types to the clusters 
+```{r}
+#####Be careful about the order in which clusters are identified and assigned new ids. 
+# Have a look at how to modify individual cluster ids 
+new.cluster.ids <- c("Naive CD4 T", "CD14+ Mono", "Memory CD4 T", "B", "CD8 T", "FCGR3A+ Mono",
+    "NK", "DC", "Platelet")
+names(new.cluster.ids) <- levels(pbmc)
+pbmc <- RenameIdents(pbmc, new.cluster.ids)
+DimPlot(pbmc, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend()
+```
+
+```{r}
+#Subsetting all the wild type cells : 
+```
+
+
+
+
+
+
+
+
+##Further Improvements
+1) Normalization using harmony ? 
+2) Removal of doublets 
+3) Once umap clustering is done : write code to remove cells inbetween clusters for improved results 
+
+
+### 
+The next step is to take the Seurat Object with the expression matrix : esssentially the counts matrix and then take the identities of the cells ( to which clusters the cells belong to) and put in this object to SCNEIC workflow. 
+
+
+```{r}
+expr_mat <- readMM(file = "./data/GSM7056033_30week_dnmt3a_45_1_matrix.mtx.gz") %>%
+  as.matrix()
+
+dim(expr_mat)
+```
+
+```{r}
+genes_data <- read.table(file = "./data/GSM7056033_30week_dnmt3a_45_1_genes.tsv.gz", header = F, sep = "\t")
+```
+
+```{r}
+barcodes <- read.table(file = "./data/GSM7056033_30week_dnmt3a_45_1_barcodes.tsv.gz", header = F, sep = "\t")
+```
+
+```{r}
+row.names(expr_mat) <- genes_data$V1
+colnames(expr_mat) <- barcodes$V1
+head(expr_mat)
+```
+
+```{r}
+sce <- CreateSeuratObject(counts = expr_mat, assay = "RNA")
+rm(list = ls())
+```
+
+```{r}
+
+```
+

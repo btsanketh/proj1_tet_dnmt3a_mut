@@ -1,0 +1,582 @@
+---
+title: "grn_scenic_day30_macrophages"
+author: "Sanketh"
+date: "2024-01-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Only run the first time : CisTarget Databases
+```{bash}
+##Dowloading the cisTarget databases : Be careful while doing so 
+#10kb up and down of TSS
+##A bit confusing : Have to use the v1 feather files for scenic 
+wget https://resources.aertslab.org/cistarget/databases/old/mus_musculus/mm10/refseq_r80/mc9nr/gene_based/mm10__refseq-r80__10kb_up_and_down_tss.mc9nr.feather
+wget https://resources.aertslab.org/cistarget/databases/old/mus_musculus/mm10/refseq_r80/mc9nr/gene_based/mm10__refseq-r80__500bp_up_and_100bp_down_tss.mc9nr.feather
+
+```
+
+
+#Loading the required packages 
+
+```{r}
+library(SCENIC)
+library(RcisTarget)
+library(SCopeLoomR)
+library(Seurat)
+library(tidyverse)
+library(ggplot2)
+library(rbokeh)
+library(plotly)
+#Data dir for week 30 
+dataDir <- "/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/data/week30/"
+scenicDir <- "/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/data/week30/scenic_results/"
+rdaDir <- "/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/data/week30/rda/"
+dbDir <- "../scenic/cisTarget_databases/mm10/"
+```
+
+
+####To read in v2 feather files 
+```{r}
+#Modifying the feather files so that we can read in v2 feather files : 
+
+#You can now access the latest database resources. And modify the feather as follows.
+db <- importRankings("../scenic/cisTarget_databases/mm10_v2/mm10_10kbp_up_10kbp_down_full_tx_v10_clust.genes_vs_motifs.rankings.feather",indexCol = "motifs")
+names(db@rankings)[1] <- "features"
+db@org <- "mgi"
+db@genome <- "mm10"
+arrow::write_feather(db@rankings,
+"../scenic/cisTarget_databases/mm10_v2/mm10_10kbp_up_10kbp_down_full_tx_v10_clust.genes_vs_motifs.rankings.feather")
+
+db <- importRankings("../scenic/cisTarget_databases/mm10_v2/mm10_500bp_up_100bp_down_full_tx_v10_clust.genes_vs_motifs.rankings.feather",
+                     indexCol = "motifs")
+names(db@rankings)[1] <- "features"
+db@org <- "mgi"
+db@genome <- "mm10"
+arrow::write_feather(db@rankings,
+"../scenic/cisTarget_databases/mm10_v2/mm10_500bp_up_100bp_down_full_tx_v10_clust.genes_vs_motifs.rankings.feather")
+
+##Use v9 version instead : 
+mm10__refseq-r80__10kb_up_and_down_tss.mc9nr.feather
+mm10__refseq-r80__500bp_up_and_100bp_down_tss.mc9nr.feather
+
+```
+
+
+
+
+
+
+
+
+###Downloading the required cisTarget databases
+
+```{r}
+#The cis target databases are present here :
+#https://resources.aertslab.org/cistarget/
+
+#For mouse check the version mm9 or mm10 and be careful; 
+##The mouse databse
+#dbFiles <- c("https://resources.aertslab.org/cistarget/databases/old/mus_musculus/mm10/refseq_r80/mc9nr/gene_bas#ed/mm10__refseq-r80__10kb_up_and_down_tss.mc9nr.feather",
+#"https://resources.aertslab.org/cistarget/databases/old/mus_musculus/mm10/refseq_r80/mc9nr/gene_based/mm10__refse#q-r80__500bp_up_and_100bp_down_tss.mc9nr.feather")
+```
+
+##Loading in the Seurat Object 
+```{r}
+#Loading all the seurat objects 
+load(file = paste0(rdaDir,"merged_seurat_harmony.rda"))
+rm(merged_seurat_doublets,sweep.stats,sweep.list)
+```
+
+##Filtering such that we take only the matrix with the most variable genes 
+```{r}
+#Running the pipeline for one sample to test 
+#Using dnmt3a_45_1 
+var_genes <- VariableFeatures(merged_seurat_harmony)
+# exprMat <- merged_seurat_harmony[["RNA"]]$counts %>%
+#         as.matrix()
+exprMat <- merged_seurat_harmony[["RNA"]]$counts[var_genes,] %>%
+as.matrix()
+cellInfo <- data.frame(merged_seurat_harmony@meta.data)
+saveRDS(cellInfo,file = "int/cellInfo.rds")           
+rm(bcmvn)
+save.image(file = paste(rdaDir,"exprMat_scenic.rda"))
+```
+
+
+
+```{r}
+rdaDir <- "/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/data/week30/rda/"
+load(file = paste(rdaDir,"exprMat_scenic.rda"))
+```
+
+
+
+```{r}
+##For scoring the grn and clustering it is interesting to compare the results with known info about the cells. 
+#We can assign which variables to plot and assign them a color 
+
+#The number of genes where the counts are more than 1 for each cell 
+cellInfo$nGene <- colSums(exprMat > 1)
+head(cellInfo)
+```
+
+```{r}
+#cellInfo <- data.frame(cellInfo)
+#For now leave the cell type as cell idents of Seurat 
+cellInfo$CellType <- cellInfo$seurat_clusters
+```
+
+##Create a color pallete for cell type and genotype 
+```{r}
+colVars <- list(CellType=c("0"="#A6CDE2",
+          "1"="#1E78B4","2"="#74C476",
+          "3"="#B15928","4"="#F59899","5"="#E11E26",
+          "6"="#FCBF6E","7"="#F47E1F",
+          "8"="#6A3E98","9" = "#FAF39B", 
+          "10" = "#808080", "11" = "#006600", "12"="skyblue","13"="cyan",
+          "14"= "yellow", "15"= "pink", "16" = "purple"),
+                genotype=c("dnmt3a_45_1"="#F47E1F",
+                           "dnmt3a_45_2"= "#A6CDE2",
+                           "tet2_45_1"="#FCBF6E",
+                           "tet2_45_2"="#1E78B4",
+                           "wt_45_1"="grey"))
+
+colVars$CellType <- colVars$CellType[intersect(names(colVars$CellType), cellInfo$CellType)]
+colVars$genotype <- colVars$genotype[intersect(names(colVars$genotype),cellInfo$genotype)]
+plot.new(); legend(0,1, fill=colVars$CellType, legend=names(colVars$CellType))
+```
+
+
+##Create color pallete for genotype as well : 
+```{r}
+plot.new(); legend(0,1, fill=colVars$genotype, legend=names(colVars$genotype))
+```
+
+```{r}
+saveRDS(cellInfo, file="int/cellInfo.rds")
+saveRDS(colVars, file = "int/colVars.rds")
+```
+
+
+
+```{r}
+### Initialize settings
+org = "mgi" #or hgnc for human
+getwd()
+dbDir <- dbDir #Rcis Target Databases
+myDatasetTitle <- "GRN_Day30"  # choose a name for your analysis
+data(defaultDbNames)
+dbs <- c("mm10__refseq-r80__500bp_up_and_100bp_down_tss.mc9nr.feather")
+
+data(list="motifAnnotations_mgi_v9",package = "RcisTarget")
+motifAnnotations_mgi <- motifAnnotations_mgi_v9
+
+scenicOptions <- initializeScenic(org=org, dbDir=dbDir, dbs=dbs, datasetTitle=myDatasetTitle, nCores=10) 
+
+scenicOptions@inputDatasetInfo$cellInfo <- "int/cellInfo.Rds"
+scenicOptions@inputDatasetInfo$colVars <- "int/colVars.Rds"
+
+```
+
+
+
+##Gene filter selection 
+Only genes present in the RcisTarget database will be kept. 
+
+```{r}
+# (Adjust minimum values according to your dataset)
+##Issue with sparseMatrices in Scenic : Just make it a matrix
+# genesKept <- geneFiltering(exprMat, scenicOptions=scenicOptions,
+#                            minCountsPerGene=3*.01*ncol(exprMat),
+#                            minSamples=ncol(exprMat)*.01)
+#genesKept
+```
+
+##Just to check if any of the interesting genes are filtered out
+
+```{r}
+# interestingGenes <- c("Cxcl13", "Cd4", "Cd9")
+# # any missing?
+# interestingGenes[which(interestingGenes %in% genesKept)] #All present 
+```
+
+##Modifying the exprMat to keep only the relevant genes. We can now filter the expression matrix. This matrix is now ready for the co-expression analysis.
+
+##Will skip this for now : Take all the 2000 highly variable gens 
+```{r}
+# exprMat_filtered <- exprMat[genesKept, ]
+# dim(exprMat_filtered)
+# rm(exprMat)
+```
+
+##Correlation
+
+Correlation GENIE3/GRNBoost can detect both positive and negative associations. In order to distinguish potential activation from repression, we will split the targets into positive- and negative-correlated targets (i.e. Spearman correlation between the TF and the potential target).
+
+(This step can be run either before/after or simultaneously to GENIE3/GRNBoost)
+
+Calculate the correlation:
+
+
+```{r}
+# Optional: add log (if it is not logged/normalized already)
+exprMat_log <- log2(exprMat+1) 
+```
+
+
+```{r}
+runCorrelation(exprMat_log , scenicOptions)
+```
+
+##Running GENEIE 3 : The input to GENIE3 is typically an expression matrix and a list of candidate regulators. The function runGenie3 will run GENIE3 with default settings, which are usually adequate for most datasets, using the transcription factors available in RcisTarget databases as candidate regulators.
+
+Since GENIE3 is based on a Random Forest approach, each time it is run the results will be slightly different. The higher the number of trees used (ntrees), the lower the variability. We recommend to use set.seed to reproduce exact results in multiple runs. For more details, check ?GENIE3 (GENIE3 help) or ?runGenie3 (SCENIC wrapper for GENIE3).
+
+= GENIE3 will typically take several hours (or days) to run. If you are running this workflow on an RStudio session, we recommend that you stop here and run the next code chunk in an independent R console (i.e. with screen/tmux) or in an server/HPC (if available). The upcoming code chunks will resume the workflow by loading GENIE3 output.
+
+
+```{r}
+# Run GENIE3
+set.seed(123)
+runGenie3(exprMat_log, scenicOptions)
+```
+
+##Running Scenic 
+```{r echo = F}
+#scenicOptions <- readRDS("int/scenicOptions.Rds")
+scenicOptions@settings$verbose <- TRUE
+scenicOptions@settings$nCores <- 8
+scenicOptions@settings$seed <- 123
+
+scenicOptions@settings$dbs <- dbs
+
+
+# Optional: log expression (for TF expression plot, it does not affect any other calculation)
+#exprMat_log <- log2(exprMat+1)
+#dim(exprMat)
+scenicOptions <- runSCENIC_1_coexNetwork2modules(scenicOptions)
+
+save.image(paste(rdaDir,"scenic_settings.rda"))
+
+```
+
+
+```{r}
+load(file = paste(rdaDir,"scenic_settings.rda")) 
+```
+
+
+```{r}
+scenicOptions <- runSCENIC_2_createRegulons(scenicOptions, coexMethod="top10perTarget")
+scenicOptions <- runSCENIC_3_scoreCells(scenicOptions, exprMat_log)
+```
+
+
+
+##Binarizing the Network
+
+```{r}
+
+aucellApp <- plotTsne_AUCellApp(scenicOptions, exprMat_log)
+savedSelections <- shiny::runApp(aucellApp)
+
+# Save the modified thresholds:
+newThresholds <- savedSelections$thresholds
+scenicOptions@fileNames$int["aucell_thresholds",1] <- "int/newThresholds.Rds"
+saveRDS(newThresholds, file=getIntName(scenicOptions, "aucell_thresholds"))
+saveRDS(scenicOptions, file="int/scenicOptions.Rds") 
+```
+
+Once the thresholds are set store the binarized results in the seni settings
+
+```{r}
+scenicOptions <- readRDS(file = "int/scenicOptions.Rds")
+scenicOptions@inputDatasetInfo$cellInfo <- "int/cellInfo.Rds"
+scenicOptions@inputDatasetInfo$colVars <- "int/colVars.Rds"
+```
+
+
+
+
+```{r}
+# scenicOptions@settings$devType="png"
+scenicOptions <- runSCENIC_4_aucell_binarize(scenicOptions)
+```
+
+##Clustering / Dimensionality reduction on regulon activity
+
+```{r}
+nPcs <- c(5,15,50)
+```
+
+```{r}
+scenicOptions@settings$seed <- 123 # same seed for all of them
+# Run t-SNE with different settings:
+fileNames <- tsneAUC(scenicOptions, aucType="AUC", nPcs=nPcs, perpl=c(5,15,50))
+fileNames <- tsneAUC(scenicOptions, aucType="AUC", nPcs=nPcs, perpl=c(5,15,50), onlyHighConf=TRUE, filePrefix="int/tSNE_oHC")
+# Plot as pdf (individual files in int/):
+fileNames <- paste0("int/",grep(".Rds", grep("tSNE_", list.files("int"), value=T), value=T))
+```
+
+The dataset has only  regulons : So to compare them
+
+```{r}
+par(mfrow=c(length(nPcs), 3))
+fileNames <- paste0("int/",grep(".Rds", grep("tSNE_AUC", list.files("int"), value=T, perl = T), value=T))
+plotTsne_compareSettings(fileNames, scenicOptions, varName = "genotype" ,showLegend = T, cex=.5)
+```
+
+```{r}
+scenicOptions@settings$defaultTsne$aucType <- "AUC"
+scenicOptions@settings$defaultTsne$dims <- 5
+scenicOptions@settings$defaultTsne$perpl <- 15
+saveRDS(scenicOptions, file="./int/scenicOptions.Rds")
+```
+
+
+
+##Cell states
+
+AUCell provides the activity of the regulons across the cells. By clustering the cells based on this regulon activity (either the continuous or binary AUC matrix), we can see whether there are groups of cells that tend to have the same regulons active, and reveal the network states that are recurrent across multiple cells. These states would be equivalent to the attractor states of the network. Combining these clustering with different visualization methods, we can explore the association of cell states with specific regulons.
+
+SCENIC provides some wrapper functions to get a quick overview. For example, projecting the AUC and TF expression onto t-SNEs, and visualizing of the AUC as heatmaps, but feel free to explore alternative clustering and visualization tools.
+
+Projection the AUC and TF expression onto t-SNEs Briefly, a t-SNE is a 2D projection of the cells, where cells (dots) are placed close to each other if they have similar input profiles (in our case, regulon activity). The t-SNE usually allows to get a quick and easy overview of the cell states in the dataset. Note however, that t-SNE works well to identify distinct classes, but it is not appropiate for dinamic/continuous processes (e.g. trajectory-like visualizations).
+
+```{r}
+aucellApp <- plotTsne_AUCellApp(scenicOptions, exprMat_log) # default t-SNE
+savedSelections <- shiny::runApp(aucellApp)
+```
+
+```{r}
+print(tsneFileName(scenicOptions))
+```
+
+```{r}
+tSNE_scenic <- readRDS(tsneFileName(scenicOptions))
+aucell_regulonAUC <- loadInt(scenicOptions, "aucell_regulonAUC")
+
+# Show TF expression:
+par(mfrow=c(2,3))
+AUCell::AUCell_plotTSNE(tSNE_scenic$Y, exprMat_log, aucell_regulonAUC[onlyNonDuplicatedExtended(rownames(aucell_regulonAUC))[c("Fos", "Cebpb", "Xbp1","Atf3", "Mafb")],], plots="Expression")
+```
+
+```{r}
+#Note Cairo package not installed : Just used pdf instead 
+# Save AUC as PDF:
+pdf("output/Step4_BinaryRegulonActivity_tSNE_colByAUC.pdf", width=20, height=15)
+par(mfrow=c(4,6))
+AUCell::AUCell_plotTSNE(tSNE_scenic$Y, cellsAUC=aucell_regulonAUC, plots="AUC")
+dev.off()
+```
+
+```{r}
+library(KernSmooth)
+library(RColorBrewer)
+dens2d <- bkde2D(tSNE_scenic$Y, 1)$fhat
+image(dens2d, col=brewer.pal(9, "YlOrBr"), axes=FALSE)
+contour(dens2d, add=TRUE, nlevels=5, drawlabels=FALSE)
+```
+
+Show several regulons simulataneously First plot shows the AUC score of the regulons and the second plot shows the binary version of it where the regulons are classified as turned on or turned off based on a thresshold.
+
+```{r}
+#par(bg = "black")
+par(mfrow=c(1,2))
+
+regulonNames <- c( "Cebpb","Mafb")
+regulonNames <- list(red=c("Cebpb", "Mafb"),
+                     green=c("Gata3"),
+                     blue=c( "Emoes"))
+
+cellCol <- plotEmb_rgb(scenicOptions, regulonNames, aucType="AUC", aucMaxContrast=0.6)
+
+cellCol <- plotEmb_rgb(scenicOptions, regulonNames, aucType="Binary")
+
+mat2col <- readRDS("int/2.2_motifs_AUC.Rds")
+emb <- readRDS("int/tSNE_AUC_05pcs_05perpl.Rds")
+###Check what the problem is
+cellCol <- plotEmb_rgb(list(mat2col=mat2col, emb=emb), regulonNames, aucType="Binary")
+
+```
+
+To chek the genes include in the regulons :
+
+```{r}
+regulons <- loadInt(scenicOptions, "regulons")
+regulons[c("Dlx5", "Irf1")]
+```
+
+Only regulons with 10 genes or more are scored with AU cell :
+
+```{r}
+regulons <- loadInt(scenicOptions, "aucell_regulons")
+head(cbind(onlyNonDuplicatedExtended(names(regulons))))
+```
+
+Details on the TF-target links: For each TF-target pair, the stats from the intermediate steps are summarized in loadInt(scenicOptions, "regulonTargetsInfo") (saved as text in: getOutName(scenicOptions, "s2_regulonTargetsInfo"): output/Step2_regulonTargetsInfo.tsv). This table can be used to explore the support to specific links. Since it will typically contain several thousand rows (in this run: 1276), in most cases it is advisable to subset it before exporting it as HTML.
+
+```{r}
+regulonTargetsInfo <- loadInt(scenicOptions, "regulonTargetsInfo")
+tableSubset <- regulonTargetsInfo[TF=="Cebpb" & highConfAnnot==TRUE]
+viewMotifs(tableSubset, options=list(pageLength=5)) 
+```
+
+The full list of TF motifs supporting the regulons can be seen in the restuls from RcisTarget motif enrichment results (for the co-expression modules). These are saved in motifEnrichment_selfMotifs_wGenes. A preview of these results is exported as html in output/Step2_MotifEnrichment_preview.html (and as text in: output/Step2_MotifEnrichment.tsv).
+
+Alternative tables, showing more or fewer rows/columns could be generated modifiying this code:
+
+```{r}
+motifEnrichment_selfMotifs_wGenes <- loadInt(scenicOptions, "motifEnrichment_selfMotifs_wGenes")
+tableSubset <- motifEnrichment_selfMotifs_wGenes[highlightedTFs=="Dlx5"]
+viewMotifs(tableSubset) 
+```
+
+#Regulators for known cell types or clusters The regulatory analysis from SCENIC can be combined with other analyses (typically clustering), or focus on regulators for specific cell types. There are multiple options to do these analyses (your imagination is the limit!). Here are some quick examples to start:
+
+Average Regulon Activity by cluster To start from clusters/cell types from Seurat: cellInfo \<- data.frame(seuratCluster=Idents(seuratObject)))
+
+```{r}
+library(AUCell)
+cellInfo <- data.frame(cellInfo)
+regulonAUC <- loadInt(scenicOptions, "aucell_regulonAUC")
+regulonAUC <- regulonAUC[onlyNonDuplicatedExtended(rownames(regulonAUC)),]
+regulonActivity_byCellType <- sapply(split(rownames(cellInfo), cellInfo$genotype),
+                                     function(cells) rowMeans(getAUC(regulonAUC)[,cells]))
+regulonActivity_byCellType_Scaled <- t(scale(t(regulonActivity_byCellType), center = T, scale=T))
+
+ComplexHeatmap::Heatmap(regulonActivity_byCellType, name="Regulon activity")
+#Be careful about scaling and centering the data
+ComplexHeatmap::Heatmap(regulonActivity_byCellType_Scaled, name="Regulon activity")
+```
+
+```{r}
+cellInfo <- data.frame(cellInfo)
+regulonAUC <- loadInt(scenicOptions, "aucell_regulonAUC")
+regulonAUC <- regulonAUC[onlyNonDuplicatedExtended(rownames(regulonAUC)),]
+regulonActivity_byCellType <- sapply(split(rownames(cellInfo), cellInfo$genotype),
+                                     function(cells) rowMeans(getAUC(regulonAUC)[,cells]))
+regulonActivity_byCellType_Scaled <- t(scale(t(regulonActivity_byCellType), center = T, scale=T))
+
+ComplexHeatmap::Heatmap(regulonActivity_byCellType, name="Regulon activity")
+#Be careful about scaling and centering the data
+ComplexHeatmap::Heatmap(regulonActivity_byCellType_Scaled, name="Regulon activity")
+```
+
+
+
+
+```{r}
+cellInfo <- data.frame(cellInfo)
+regulonAUC <- loadInt(scenicOptions, "aucell_regulonAUC")
+regulonAUC <- regulonAUC[onlyNonDuplicatedExtended(rownames(regulonAUC)),]
+regulonActivity_byCellType <- sapply(split(rownames(cellInfo), cellInfo$genotype),
+                                     function(cells) rowMeans(getAUC(regulonAUC)[,cells]))
+regulonActivity_byCellType_Scaled <- t(scale(t(regulonActivity_byCellType), center = T, scale=T))
+
+ComplexHeatmap::Heatmap(regulonActivity_byCellType, name="Regulon activity")
+#Be careful about scaling and centering the data
+ComplexHeatmap::Heatmap(regulonActivity_byCellType_Scaled, name="Regulon activity")
+```
+
+
+
+
+
+```{r}
+topRegulators <- reshape2::melt(regulonActivity_byCellType_Scaled)
+colnames(topRegulators) <- c("Regulon", "CellType", "RelativeActivity")
+topRegulators <- topRegulators[which(topRegulators$RelativeActivity>0),]
+viewTable(topRegulators)
+```
+
+Binarized version
+
+```{r}
+minPerc <- .7
+binaryRegulonActivity <- loadInt(scenicOptions, "aucell_binary_nonDupl")
+cellInfo_binarizedCells <- cellInfo[which(rownames(cellInfo)%in% colnames(binaryRegulonActivity)),, drop=FALSE]
+regulonActivity_byCellType_Binarized <- sapply(split(rownames(cellInfo_binarizedCells), cellInfo_binarizedCells$CellType), 
+                                               function(cells) rowMeans(binaryRegulonActivity[,cells, drop=FALSE]))
+binaryActPerc_subset <- regulonActivity_byCellType_Binarized[which(rowSums(regulonActivity_byCellType_Binarized>minPerc)>0),]
+ComplexHeatmap::Heatmap(binaryActPerc_subset, name="Regulon activity (%)", col = c("white","pink","red"))
+```
+
+
+```{r}
+minPerc <- .7
+binaryRegulonActivity <- loadInt(scenicOptions, "aucell_binary_nonDupl")
+cellInfo_binarizedCells <- cellInfo[which(rownames(cellInfo)%in% colnames(binaryRegulonActivity)),, drop=FALSE]
+regulonActivity_byCellType_Binarized <- sapply(split(rownames(cellInfo_binarizedCells), cellInfo_binarizedCells$genotype), 
+                                               function(cells) rowMeans(binaryRegulonActivity[,cells, drop=FALSE]))
+binaryActPerc_subset <- regulonActivity_byCellType_Binarized[which(rowSums(regulonActivity_byCellType_Binarized>minPerc)>0),]
+ComplexHeatmap::Heatmap(binaryActPerc_subset, name="Regulon activity (%)", col = c("white","pink","red"))
+```
+
+
+
+```{r}
+topRegulators <- reshape2::melt(regulonActivity_byCellType_Binarized)
+colnames(topRegulators) <- c("Regulon", "CellType", "RelativeActivity")
+topRegulators <- topRegulators[which(topRegulators$RelativeActivity>minPerc),]
+viewTable(topRegulators)
+```
+
+Cell-type specific regulators (based on the Regulon Specificity Score (RSS) proposed by Suo et al. for the Mouse Cell Atlas in 2018). Useful for big analysis with many cell types, to identify the cell-type specific regulons.
+
+```{r}
+# regulonAUC <- loadInt(scenicOptions, "aucell_regulonAUC")
+rss <- calcRSS(AUC=getAUC(regulonAUC), cellAnnotation=cellInfo[colnames(regulonAUC), "genotype"])
+rssPlot <- plotRSS(rss)
+plotly::ggplotly(rssPlot$plot)
+```
+
+```{r}
+#To plot the RSS scores on specific cell types 
+plotRSS_oneSet(rss, setName = "dnmt3a_45_1")
+```
+
+
+
+```{r}
+#To plot the RSS scores on specific cell types 
+plotRSS_oneSet(rss, setName = "dnmt3a_45_2")
+```
+
+```{r}
+#To plot the RSS scores on specific cell types 
+plotRSS_oneSet(rss, setName = "tet2_45_1")
+```
+
+```{r}
+#To plot the RSS scores on specific cell types 
+plotRSS_oneSet(rss, setName = "tet2_45_2")
+```
+
+
+
+```{r}
+#To plot the RSS scores on specific cell types 
+plotRSS_oneSet(rss, setName = "wt_45_1")
+```
+
+
+
+
+
+
+To visualize embeddings/trajectories calculated using other methods :
+
+```{r}
+library(Seurat)
+dr_coords <- Embeddings(merged_seurat_harmony, reduction="umap")
+
+###Embedings in Seurat are also calulated only on the highly variable genes. 
+tfs <- c("Xbp1","Mafb","Cebpb", "Gata3")
+par(mfrow=c(2,2))
+AUCell::AUCell_plotTSNE(dr_coords, cellsAUC=selectRegulons(regulonAUC, tfs), plots = "AUC")
+```

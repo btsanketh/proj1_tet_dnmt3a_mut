@@ -1,0 +1,3 @@
+load("/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/int/scenicOptions.Rds")
+load("/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/int/tSNE_oHC_AUC_12pcs_05perpl.Rds")
+load("/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/int/tSNE_AUC_12pcs_15perpl.Rds")
