@@ -26,6 +26,10 @@ library(devtools)
 library(presto)
 library(DoubletFinder)
 library(Matrix)
+library(GMCM)
+library(matrixStats)
+library(SCENIC)
+library(RcisTarget)
 #devtools::install_github('immunogenomics/presto')
 #install.packages("remotes")
 #remotes::install_github("chris-mcginnis-ucsf/DoubletFinder")
@@ -34,6 +38,7 @@ getwd()
 #Set the data dir to week 30 
 dataDir <- ("/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/data/week30/")
 rdaDir <- ("/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/data/week30/rda/")
+imp_figs <- ("/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/imp_figs/")
 ```
 
 
@@ -66,12 +71,17 @@ read_barcodes <- function(file){
     unlist() %>%
     purrr::set_names(c("Sample_geo","week","mutation","type","subtype")) %>%
     as.list()
+  barcode_metadata$mousetype <- paste(barcode_metadata$type,barcode_metadata$subtype,sep = ".")
   y$sample_geo <- rep(barcode_metadata$Sample_geo,nrow(y))
   y$week <- rep(barcode_metadata$week,nrow(y))
-  y$mutation <- rep(barcode_metadata$mutation,nrow(y))
   y$genotype <- rep(paste(barcode_metadata$mutation,barcode_metadata$type,
                            barcode_metadata$subtype, sep="_"),nrow(y))
-  return(y)
+   if(barcode_metadata$mousetype == "45.1"){
+     y$mutation <- rep("wt",nrow(y))
+   }else{
+     y$mutation <- rep(barcode_metadata$mutation,nrow(y))
+    }
+   return(y)
 }
 ```
 
@@ -202,23 +212,32 @@ dataDir <- ("/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/data/week30/")
 rdaDir <- ("/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/data/week30/rda/")
 ```
 
-
 ```{r}
 load(file = paste0(rdaDir,"merged_seurat_harmony.rda"))
+#merged_seurat_harmony@meta.data$genotype_clusters <- cellInfo$genotype_clusters
+## Modify the meatadata column because muutation should be changed : All Cd45.1 should be wt and cd45d.2 should be the various mutations 
+cellInfo$mutation[cellInfo$genotype %in% c('dnmt3a_45_1','tet2_45_1')] <- "wt"
+cellInfo$genotype_clusters <- paste(cellInfo$mutation,cellInfo$seurat_clusters,sep = "_")
+merged_seurat_harmony@meta.data <- cellInfo
 ```
 
 
 ```{r}
-DimPlot(merged_seurat_harmony, reduction = "umap", label = TRUE)
+DimPlot(merged_seurat_harmony, reduction = "umap", label = T,label.size = 2)
+#ggsave(plot = umap_celltypes, filename = paste(imp_figs,"umap_celltypes.pdf"),dpi = 50)
 ```
 
 
 
 
 ```{r}
-DimPlot(merged_seurat_harmony, reduction = "umap", label = T, group.by = "genotype")
+umap_genotype <- DimPlot(merged_seurat_harmony, reduction = "umap", label = F, group.by = "genotype")
+ggsave(plot = umap_genotype, filename = paste(imp_figs,"umap_genotype.pdf"), dpi = 50)
 ```
 
+```{r}
+DimPlot(merged_seurat_harmony, reduction = "umap", label = F, group.by = "genotype_clusters")
+```
 
 
 
@@ -253,9 +272,12 @@ table(merged_seurat_harmony@meta.data$seurat_clusters)
 ggplot(dist_genotype) +
   aes(x = seurat_clusters,
       y = n, fill = mutation) +
-  geom_bar(stat = "identity") + 
+  geom_bar(stat = "identity",
+           position = "fill") + 
+  coord_flip() +
   scale_fill_brewer(palette = 3) +
   theme_classic()
+#ggsave(filename = "imp_figs/cell_distributions.pdf")
 ```
 
 ```{r}
@@ -268,9 +290,12 @@ dist_cellphase <- merged_seurat_harmony@meta.data %>%
 ggplot(dist_cellphase) +
   aes(x = seurat_clusters,
       y = n, fill = Phase) +
-  geom_bar(stat = "identity") + 
+  geom_bar(stat = "identity",
+           position = "fill") + 
   scale_fill_brewer(palette = 1) +
+  coord_flip() +
   theme_classic()
+ggsave(filename = "./imp_figs/cellcycle_distribution.pdf")
 ```
 
 ##Renaming the idents based on the expression of some known markers 
@@ -283,7 +308,7 @@ merged_seurat_harmony <- RenameIdents(object = merged_seurat_harmony,
                                       '7' = "Monocytes", '8' = "CXCR6+ T cells",
                                       '9' = "Dendritic cells", '10' = "Mixed lymphocytes",
                                       '11' = "Mixed Lymphocytes", '12' = "B cells", 
-                                      '13' = "Proliferatin T cells", '14' = "Proliferating T cells",
+                                      '13' = "Proliferating T cells", '14' = "Proliferating T cells",
                                       '15' = "B cells", '16' = "Vascular Fibroblasts"
                                       )
 table(Idents(merged_seurat_harmony))
@@ -292,10 +317,32 @@ table(Idents(merged_seurat_harmony))
 
 
 ```{r}
-cellInfo <- merged_seurat_harmony@meta.data
-cellInfo$seurat_clusters <- Idents(merged_seurat_harmony)
-cellInfo$genotype_clusters <- paste(cellInfo$mutation,cellInfo$seurat_clusters,sep = "_")
-saveRDS(cellInfo, file = "./data/week30/rda/cellInfo.rds")
+#cellInfo <- merged_seurat_harmony@meta.data
+#cellInfo$seurat_clusters <- Idents(merged_seurat_harmony)
+#cellInfo$genotype_clusters <- paste(cellInfo$mutation,cellInfo$seurat_clusters,sep = "_")
+saveRDS(object = cellInfo, file = "./data/week30/rda/cellInfo.rds")
+#rm(cellInfo)
+#cellInfo <- load(file = "./data/week30/rda/cellInfo.rds")
+```
+
+
+```{r}
+#merged_seurat_harmony@meta.data$seurat_clusters <- Idents(merged_seurat_harmony)
+dist_genotype_ann <- merged_seurat_harmony@meta.data %>%
+                 group_by(seurat_clusters,mutation) %>%
+                 summarise(n = n())
+```
+
+```{r}
+#Just plot proportions and not whole numbers !!!
+ggplot(dist_genotype_ann) +
+  aes(x = seurat_clusters,
+      y = n,
+      fill = mutation) +
+  geom_bar(stat = "identity") + 
+  #coord_flip()+
+  scale_fill_brewer(palette = 3) +
+  theme_classic()
 ```
 
 
@@ -303,24 +350,178 @@ saveRDS(cellInfo, file = "./data/week30/rda/cellInfo.rds")
 
 
 
+```{r}
+cellInfo$genotype_clusters <- as.factor(cellInfo$genotype_clusters)
+cellInfo$genotype_clusters
+```
+
+
+```{r}
+##Finding the most variable features 
+
+Sds <- t(merged_seurat_harmony@assays$RNA$data) %>%
+       as.matrix() %>%
+       colSds(na.rm = T)
+
+gene_var <- as_tibble((Sds))
+
+features <- rownames(merged_seurat_harmony)
+
+variance_genes <- cbind(features,gene_var) %>%
+                  rename(variance = value)
+
+
+data(list = "motifAnnotations_mgi_v9" ,package = "RcisTarget")
+
+tfs <- unique(motifAnnotations_mgi_v9$TF)
+
+var_all_tfs <- variance_genes[variance_genes$features %in% tfs,]
+
+ggplot(variance_genes) +
+  aes(x = variance) +
+  geom_histogram(bins = 200) +
+  ylim(c(0,500)) +
+  xlim(c(0,1.3)) + 
+  theme_classic()
+
+variance_genes[(variance_genes$variance >= 0.5) | (variance_genes$features %in% tfs),]
+var_all_tfs[var_all_tfs$variance >= 0.3,]
+
+```
+
+
+```{r}
+ggplot(var_all_tfs) +
+  aes(x = variance) +
+  geom_histogram(bins = 200) +
+  ylim(c(0,70)) +
+  xlim(c(0,1)) + 
+  theme_classic()
+```
+
+
+```{r}
+FeaturePlot(merged_seurat_harmony, features = c("Xbp1","Cepbp"), split.by = "mutation")
+```
+
+
+
+```{r}
+DimPlot(merged_seurat_harmony, reduction = "umap", split.by = "genotype")
+```
+
+
+```{r}
+DimPlot(merged_seurat_harmony, reduction = "umap", split.by = "mutation")
+```
+
+
+
+```{r}
+FeaturePlot(merged_seurat_harmony, features = c ("Maf"), split.by = "mutation")
+```
+
+
+```{r}
+FeaturePlot(merged_seurat_harmony, features = c ("Jun"), split.by = "mutation")
+```
 
 
 
 
 
 
+```{r}
+# Ridge plots - from ggridges. Visualize single cell expression distributions in each cluster
+features = "Cd19"
+RidgePlot(merged_seurat_harmony, features = features, ncol = 2)
+```
 
 
 
 
 
+```{r}
+VlnPlot(merged_seurat_harmony, features = features)
+```
+
+
+```{r}
+features = "Jun"
+VlnPlot(merged_seurat_harmony, features = features, split.by = "mutation")
+```
+
+
+```{r}
+features = "Trem2"
+VlnPlot(merged_seurat_harmony, features = features)
+```
+
+```{r}
+features = "Spp1"
+VlnPlot(merged_seurat_harmony, features = features)
+```
+
+
+```{r}
+features = "Maf"
+VlnPlot(merged_seurat_harmony, features = features,split.by = "mutation")
+```
+
+
+```{r}
+features = "Xbp1"
+VlnPlot(merged_seurat_harmony, features = features,split.by = "mutation")
+```
+
+
+```{r}
+features = "Maf"
+VlnPlot(merged_seurat_harmony, features = features,split.by = "mutation")
+```
+
+
+```{r}
+features = "Cebpb"
+VlnPlot(merged_seurat_harmony, features = features,split.by = "mutation")
+```
+
+
+```{r}
+features = "Nlrp3"
+VlnPlot(merged_seurat_harmony, features = features,split.by = "mutation")
+```
 
 
 
+```{r}
+features = "Fosb"
+VlnPlot(merged_seurat_harmony, features = features,split.by = "mutation")
+```
+
+
+```{r}
+features = "Jun"
+VlnPlot(merged_seurat_harmony, features = features,split.by = "mutation")
+```
 
 
 
+```{r}
+features = "Atf3"
+VlnPlot(merged_seurat_harmony, features = features,split.by = "mutation")
+```
 
+
+```{r}
+features = "Gata3"
+VlnPlot(merged_seurat_harmony, features = features,split.by = "mutation")
+```
+
+```{r}
+features = "Klf4"
+VlnPlot(merged_seurat_harmony, features = features,split.by = "mutation")
+```
 
 
 

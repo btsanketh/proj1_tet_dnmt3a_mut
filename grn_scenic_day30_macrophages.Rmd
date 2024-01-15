@@ -35,7 +35,7 @@ library(plotly)
 dataDir <- "/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/data/week30/"
 scenicDir <- "/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/data/week30/scenic_results/"
 rdaDir <- "/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/data/week30/rda/"
-dbDir <- "../scenic/cisTarget_databases/mm10/"
+dbDir <- "../scenic/cisTarget_databases/mm10"
 ```
 
 
@@ -66,24 +66,6 @@ mm10__refseq-r80__500bp_up_and_100bp_down_tss.mc9nr.feather
 ```
 
 
-
-
-
-
-
-
-###Downloading the required cisTarget databases
-
-```{r}
-#The cis target databases are present here :
-#https://resources.aertslab.org/cistarget/
-
-#For mouse check the version mm9 or mm10 and be careful; 
-##The mouse databse
-#dbFiles <- c("https://resources.aertslab.org/cistarget/databases/old/mus_musculus/mm10/refseq_r80/mc9nr/gene_bas#ed/mm10__refseq-r80__10kb_up_and_down_tss.mc9nr.feather",
-#"https://resources.aertslab.org/cistarget/databases/old/mus_musculus/mm10/refseq_r80/mc9nr/gene_based/mm10__refse#q-r80__500bp_up_and_100bp_down_tss.mc9nr.feather")
-```
-
 ##Loading in the Seurat Object 
 ```{r}
 #Loading all the seurat objects 
@@ -111,17 +93,7 @@ save.image(file = paste(rdaDir,"exprMat_scenic.rda"))
 ```{r}
 rdaDir <- "/Users/sanketh/Desktop/proj1_tet_dnmt3a_mut/data/week30/rda/"
 load(file = paste(rdaDir,"exprMat_scenic.rda"))
-```
-
-
-
-```{r}
-##For scoring the grn and clustering it is interesting to compare the results with known info about the cells. 
-#We can assign which variables to plot and assign them a color 
-
-#The number of genes where the counts are more than 1 for each cell 
-cellInfo$nGene <- colSums(exprMat > 1)
-head(cellInfo)
+rm(cellInfo)
 ```
 
 ```{r}
@@ -182,39 +154,7 @@ scenicOptions@inputDatasetInfo$colVars <- "int/colVars.Rds"
 
 ```
 
-
-
-##Gene filter selection 
-Only genes present in the RcisTarget database will be kept. 
-
-```{r}
-# (Adjust minimum values according to your dataset)
-##Issue with sparseMatrices in Scenic : Just make it a matrix
-# genesKept <- geneFiltering(exprMat, scenicOptions=scenicOptions,
-#                            minCountsPerGene=3*.01*ncol(exprMat),
-#                            minSamples=ncol(exprMat)*.01)
-#genesKept
-```
-
-##Just to check if any of the interesting genes are filtered out
-
-```{r}
-# interestingGenes <- c("Cxcl13", "Cd4", "Cd9")
-# # any missing?
-# interestingGenes[which(interestingGenes %in% genesKept)] #All present 
-```
-
-##Modifying the exprMat to keep only the relevant genes. We can now filter the expression matrix. This matrix is now ready for the co-expression analysis.
-
-##Will skip this for now : Take all the 2000 highly variable gens 
-```{r}
-# exprMat_filtered <- exprMat[genesKept, ]
-# dim(exprMat_filtered)
-# rm(exprMat)
-```
-
 ##Correlation
-
 Correlation GENIE3/GRNBoost can detect both positive and negative associations. In order to distinguish potential activation from repression, we will split the targets into positive- and negative-correlated targets (i.e. Spearman correlation between the TF and the potential target).
 
 (This step can be run either before/after or simultaneously to GENIE3/GRNBoost)
@@ -260,21 +200,13 @@ scenicOptions@settings$dbs <- dbs
 #dim(exprMat)
 scenicOptions <- runSCENIC_1_coexNetwork2modules(scenicOptions)
 
-save.image(paste(rdaDir,"scenic_settings.rda"))
-
 ```
 
 
 ```{r}
-load(file = paste(rdaDir,"scenic_settings.rda")) 
-```
-
-
-```{r}
-scenicOptions <- runSCENIC_2_createRegulons(scenicOptions, coexMethod="top10perTarget")
+scenicOptions <- runSCENIC_2_createRegulons(scenicOptions, coexMethod="top5perTarget")
 scenicOptions <- runSCENIC_3_scoreCells(scenicOptions, exprMat_log)
 ```
-
 
 
 ##Binarizing the Network
@@ -298,19 +230,23 @@ Once the thresholds are set store the binarized results in the seni settings
 ```{r}
 # scenicOptions@settings$devType="png"
 scenicOptions <- runSCENIC_4_aucell_binarize(scenicOptions)
+saveRDS(scenicOptions, file = "./int/scenicOptions.Rds")
 ```
+
+
+#####Start from here where by loading the SCNEIC settings. Can re-load cellInfo object once the clusters
+#in the seurat have been identified. d
 
 
 ```{r}
 scenicOptions <- readRDS(file="./int/scenicOptions.Rds")
 exprMat_log <- exprMat_log <- log2(exprMat+1) 
 cellInfo <- readRDS(file = "./data/week30/rda/cellInfo.rds")
+cellInfo$genotype_clusters <- as.factor(cellInfo$genotype_clusters)
+cellInfo$genotype_clusters_ind <- paste(cellInfo$genotype,cellInfo$seurat_clusters,sep = "_")
 saveRDS(cellInfo, file="int/cellInfo.rds")
 scenicOptions@inputDatasetInfo$cellInfo <- "int/cellInfo.Rds"
 ```
-
-
-
 
 ##Clustering / Dimensionality reduction on regulon activity
 
@@ -342,10 +278,13 @@ scenicOptions@settings$defaultTsne$perpl <- 15
 saveRDS(scenicOptions, file="./int/scenicOptions.Rds")
 ```
 
+```{r}
+scenicOptions <- readRDS(file = "./int/scenicOptions.Rds")
+##Load the cellInfo table for quick reference if it is already absent 
+cellInfo <- readRDS(file = "./int/cellInfo.rds")
+```
 
 ######Load scenic options from here without disturbing previous chunks of code 
-
-
 
 ##Cell states
 
@@ -396,8 +335,8 @@ Show several regulons simulataneously First plot shows the AUC score of the regu
 #par(bg = "black")
 par(mfrow=c(1,2))
 
-regulonNames <- c( "Cebpb","Mafb")
-regulonNames <- list(red=c("Cebpb", "Mafb"),
+regulonNames <- c( "Cebpb","Xbp1")
+regulonNames <- list(red=c("Cebpb"),
                      green=c("Gata3"),
                      blue=c( "Emoes"))
 
@@ -440,7 +379,7 @@ Alternative tables, showing more or fewer rows/columns could be generated modifi
 
 ```{r}
 motifEnrichment_selfMotifs_wGenes <- loadInt(scenicOptions, "motifEnrichment_selfMotifs_wGenes")
-tableSubset <- motifEnrichment_selfMotifs_wGenes[highlightedTFs=="Dlx5"]
+tableSubset <- motifEnrichment_selfMotifs_wGenes[highlightedTFs=="Cebpb"]
 viewMotifs(tableSubset) 
 ```
 
@@ -450,16 +389,24 @@ Average Regulon Activity by cluster To start from clusters/cell types from Seura
 
 ```{r}
 library(AUCell)
+library(grid)
 cellInfo <- data.frame(cellInfo)
 regulonAUC <- loadInt(scenicOptions, "aucell_regulonAUC")
 regulonAUC <- regulonAUC[onlyNonDuplicatedExtended(rownames(regulonAUC)),]
-regulonActivity_byCellType <- sapply(split(rownames(cellInfo), cellInfo$genotype_clusters),
+regulonActivity_byCellType <- sapply(split(rownames(cellInfo), cellInfo$genotype_clusters_ind),
                                      function(cells) rowMeans(getAUC(regulonAUC)[,cells]))
 regulonActivity_byCellType_Scaled <- t(scale(t(regulonActivity_byCellType), center = T, scale=T))
 
-ComplexHeatmap::Heatmap(regulonActivity_byCellType, name="Regulon activity")
+ComplexHeatmap::Heatmap(regulonActivity_byCellType, 
+                        name="Regulon activity",
+                        row_names_gp = grid::gpar(fontsize = 7))
 #Be careful about scaling and centering the data
-ComplexHeatmap::Heatmap(regulonActivity_byCellType_Scaled, name="Regulon activity")
+
+ComplexHeatmap::Heatmap(regulonActivity_byCellType_Scaled, 
+                        name="Regulon activity",
+                        row_names_gp = grid::gpar(fontsize = 8),
+                        column_names_gp = grid::gpar(fontsize = 7)
+                        )
 ```
 
 ```{r}
@@ -508,18 +455,39 @@ Binarized version
 minPerc <- .7
 binaryRegulonActivity <- loadInt(scenicOptions, "aucell_binary_nonDupl")
 cellInfo_binarizedCells <- cellInfo[which(rownames(cellInfo)%in% colnames(binaryRegulonActivity)),, drop=FALSE]
-regulonActivity_byCellType_Binarized <- sapply(split(rownames(cellInfo_binarizedCells), cellInfo_binarizedCells$genotype_clustersd), 
+regulonActivity_byCellType_Binarized <- sapply(split(rownames(cellInfo_binarizedCells), cellInfo_binarizedCells$genotype_clusters), 
                                                function(cells) rowMeans(binaryRegulonActivity[,cells, drop=FALSE]))
 binaryActPerc_subset <- regulonActivity_byCellType_Binarized[which(rowSums(regulonActivity_byCellType_Binarized>minPerc)>0),]
 ComplexHeatmap::Heatmap(binaryActPerc_subset, name="Regulon activity (%)", col = c("white","pink","red"))
 ```
+
+## Try to modify the code to make the heatmap only for macrophages 
+```{r}
+minPerc <- .7
+binaryRegulonActivity <- loadInt(scenicOptions, "aucell_binary_nonDupl")
+cellInfo_res_macs <- cellInfo[cellInfo$seurat_clusters == "Resident-like Macrophages",]
+cellInfo_binarizedCells <- cellInfo_res_macs[which(rownames(cellInfo_res_macs)%in% colnames(binaryRegulonActivity)),, drop=FALSE]
+
+regulonActivity_byCellType_Binarized <- sapply(split(rownames(cellInfo_binarizedCells), cellInfo_binarizedCells$mutation), 
+                                               function(cells) rowMeans(binaryRegulonActivity[,cells, drop=FALSE]))
+binaryActPerc_subset <- regulonActivity_byCellType_Binarized[which(rowSums(regulonActivity_byCellType_Binarized>minPerc)>0),]
+ComplexHeatmap::Heatmap(binaryActPerc_subset, name="Regulon activity (%)", col = c("white","pink","red"))
+
+```
+
+
+
+
+
+
+
 
 
 ```{r}
 minPerc <- .7
 binaryRegulonActivity <- loadInt(scenicOptions, "aucell_binary_nonDupl")
 cellInfo_binarizedCells <- cellInfo[which(rownames(cellInfo)%in% colnames(binaryRegulonActivity)),, drop=FALSE]
-regulonActivity_byCellType_Binarized <- sapply(split(rownames(cellInfo_binarizedCells), cellInfo_binarizedCells$genotype), 
+regulonActivity_byCellType_Binarized <- sapply(split(rownames(cellInfo_binarizedCells), cellInfo_binarizedCells$seurat_clusters), 
                                                function(cells) rowMeans(binaryRegulonActivity[,cells, drop=FALSE]))
 binaryActPerc_subset <- regulonActivity_byCellType_Binarized[which(rowSums(regulonActivity_byCellType_Binarized>minPerc)>0),]
 ComplexHeatmap::Heatmap(binaryActPerc_subset, name="Regulon activity (%)", col = c("white","pink","red"))
@@ -545,31 +513,39 @@ plotly::ggplotly(rssPlot$plot)
 
 ```{r}
 #To plot the RSS scores on specific cell types 
-plotRSS_oneSet(rss, setName = "dnmt3a_45_1")
+plotRSS_oneSet(rss, setName = "dnmt3a_Resident-like Macrophages")
 ```
 
 
 
 ```{r}
 #To plot the RSS scores on specific cell types 
-plotRSS_oneSet(rss, setName = "dnmt3a_45_2")
+plotRSS_oneSet(rss, setName = "tet2_Resident-like Macrophages")
 ```
 
 ```{r}
 #To plot the RSS scores on specific cell types 
-plotRSS_oneSet(rss, setName = "tet2_45_1")
-```
-
-```{r}
-#To plot the RSS scores on specific cell types 
-plotRSS_oneSet(rss, setName = "tet2_45_2")
+plotRSS_oneSet(rss, setName = "wt_Resident-like Macrophages")
 ```
 
 
 
 ```{r}
 #To plot the RSS scores on specific cell types 
-plotRSS_oneSet(rss, setName = "wt_45_1")
+plotRSS_oneSet(rss, setName = "dnmt3a_Inflamatory Macrophages")
+```
+
+
+```{r}
+#To plot the RSS scores on specific cell types 
+plotRSS_oneSet(rss, setName = "tet2_Inflamatory Macrophages")
+```
+
+
+
+```{r}
+#To plot the RSS scores on specific cell types 
+plotRSS_oneSet(rss, setName = "wt_Inflamatory Macrophages")
 ```
 
 
@@ -584,7 +560,30 @@ library(Seurat)
 dr_coords <- Embeddings(merged_seurat_harmony, reduction="umap")
 
 ###Embedings in Seurat are also calulated only on the highly variable genes. 
-tfs <- c("Xbp1","Mafb","Cebpb", "Gata3")
+tfs <- c("Xbp1")
 par(mfrow=c(2,2))
-AUCell::AUCell_plotTSNE(dr_coords, cellsAUC=selectRegulons(regulonAUC, tfs), plots = "AUC")
+AUCell::AUCell_plotTSNE(dr_coords, cellsAUC=selectRegulons(regulonAUC, tfs), plots=c("AUC", "histogram", "binary"), cex = .5)
 ```
+
+```{r}
+##Renaming the idents based on the expression of some known markers 
+merged_seurat_harmony <- RenameIdents(object = merged_seurat_harmony,
+                                      '0' = "B cells", '1' = "T cells", 
+                                      '2' = "Resident-like Macrophages", 
+                                      '3' = "Inflamatory Macrophages", '4' = "Neutrophils",
+                                      '5' = "TRM2hi Macrophages", '6' = "T cells",
+                                      '7' = "Monocytes", '8' = "CXCR6+ T cells",
+                                      '9' = "Dendritic cells", '10' = "Mixed lymphocytes",
+                                      '11' = "Mixed Lymphocytes", '12' = "B cells", 
+                                      '13' = "Proliferating T cells", '14' = "Proliferating T cells",
+                                      '15' = "B cells", '16' = "Vascular Fibroblasts"
+                                      )
+table(Idents(merged_seurat_harmony))
+merged_seurat_harmony@meta.data$genotype_clusters <- cellInfo$genotype_clusters
+```
+
+
+```{r}
+DimPlot(merged_seurat_harmony, reduction = "umap" ,group.by = "genotype_clusters")
+```
+
