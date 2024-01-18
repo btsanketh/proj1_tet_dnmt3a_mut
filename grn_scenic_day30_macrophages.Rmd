@@ -587,3 +587,16 @@ merged_seurat_harmony@meta.data$genotype_clusters <- cellInfo$genotype_clusters
 DimPlot(merged_seurat_harmony, reduction = "umap" ,group.by = "genotype_clusters")
 ```
 
+```{r}
+#Get the Auc matrix 
+#Plot the distriutions of the AUC acrosss the different conditions
+#Split the matrix into the five genotypes and plot a histogram for the distribution of each tf in the 
+#5 genotypes.
+AUC_mat <- getAUC(regulonAUC)
+```
+
+
+```{r}
+typeof(regulonAUC)
+```
+

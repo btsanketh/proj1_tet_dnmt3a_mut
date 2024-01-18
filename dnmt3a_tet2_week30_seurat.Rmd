@@ -549,4 +549,13 @@ save.image(paste0(rdaDir,"seurat_objs_genotypes_noidents.rda")) #Can directly lo
 ```
 
 
-
+##Convert seurat object to h5ad object that can be imported directly into python
+```{r}
+##Convert seurat object to anndata object 
+library(Seurat)
+library(SeuratDisk)
+#Convert into s3 object c
+merged_seurat_harmony[["RNA"]] <- as(merged_seurat_harmony[["RNA"]], "Assay")
+SaveH5Seurat(merged_seurat_harmony, filename = "merged_seurat.h5Seurat")
+Convert("merged_seurat.h5Seurat", dest = "h5ad")
+```
