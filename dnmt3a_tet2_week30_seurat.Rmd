@@ -163,6 +163,71 @@ plot1 + plot2
 ```
 
 ```{r}
+#First subset based on mitochondrial percentage : 
+merged_seurat <- subset(merged_seurat, subset = nFeature_RNA > 200 & nFeature_RNA < 4400 & percent.mt < 15)
+#Normalize the data 
+merged_seurat <- Seurat::NormalizeData(merged_seurat, verbose = FALSE) 
+```
+
+
+```{r}
+##Finding the most variable features and the most variable TFs present in the data 
+##Next time replace with merged_seurat
+Sds <- t(merged_seurat_harmony@assays$RNA$data) %>%
+       as.matrix() %>%
+       colSds(na.rm = T)
+
+gene_var <- as_tibble((Sds))
+
+features <- rownames(merged_seurat_harmony)
+
+variance_genes <- cbind(features,gene_var) %>%
+                  rename(variance = value)
+
+
+data(list = "motifAnnotations_mgi_v9" ,package = "RcisTarget")
+
+tfs <- unique(motifAnnotations_mgi_v9$TF)
+
+var_all_tfs <- variance_genes[variance_genes$features %in% tfs,]
+
+ggplot(variance_genes) +
+  aes(x = variance) +
+  geom_histogram(bins = 30) +
+  ylim(c(0,500)) +
+  xlim(c(0.3,1.3)) + 
+  theme_classic()
+
+```
+
+
+```{r}
+ggplot(var_all_tfs) +
+  aes(x = variance) +
+  geom_histogram(bins = 100) +
+  ylim(c(0,50)) +
+  xlim(c(0.1,1.3)) + 
+  theme_classic()
+```
+
+
+```{r}
+var_genes <- variance_genes[(variance_genes$variance >= 0.5) | 
+                            (variance_genes$features %in% tfs),]$features
+#var_all_tfs[var_all_tfs$variance >= 0.3,]
+```
+
+
+
+```{r}
+#Loading cell cycle genes
+load(file = paste0(rdaDir,"cell_cycle_genes.rda"))
+```
+
+
+
+
+```{r}
 merged_seurat <- subset(merged_seurat, subset = nFeature_RNA > 200 & nFeature_RNA < 4400 & percent.mt < 15)
 merged_seurat <- Seurat::NormalizeData(merged_seurat, verbose = FALSE) %>% 
   FindVariableFeatures(selection.method = "vst", nfeatures = 2000) %>%   
@@ -219,6 +284,14 @@ load(file = paste0(rdaDir,"merged_seurat_harmony.rda"))
 cellInfo$mutation[cellInfo$genotype %in% c('dnmt3a_45_1','tet2_45_1')] <- "wt"
 cellInfo$genotype_clusters <- paste(cellInfo$mutation,cellInfo$seurat_clusters,sep = "_")
 merged_seurat_harmony@meta.data <- cellInfo
+cellInfo$genotype_clusters_ind <- paste(cellInfo$genotype,cellInfo$seurat_clusters,sep = "_")
+merged_seurat_harmony@meta.data <- cellInfo
+merged_seurat_harmony$seurat_clusters <- as.factor(merged_seurat_harmony$seurat_clusters) %>%
+                                         as.character()
+merged_seurat_harmony$genotype_clusters <- as.factor(merged_seurat_harmony$genotype_clusters) %>%
+                                           as.character()
+merged_seurat_harmony$genotype_clusters_ind <- as.factor(merged_seurat_harmony$genotype_clusters_ind) %>%
+                                            as.character()
 ```
 
 
@@ -401,6 +474,13 @@ ggplot(var_all_tfs) +
 
 
 ```{r}
+var_genes <- variance_genes[variance_genes$variance >= 0.5 | 
+                              variance_genes$features %in% tfs,]$features
+```
+
+
+
+```{r}
 FeaturePlot(merged_seurat_harmony, features = c("Xbp1","Cepbp"), split.by = "mutation")
 ```
 
@@ -531,21 +611,32 @@ VlnPlot(merged_seurat_harmony, features = features,split.by = "mutation")
 ##Subsetting seurat objects into 5 different objects based on their 
 #genotype to run SCENIC to see if there are any potential differnces 
 ```{r}
-#To take a quick look at how many cells we have in each genotype 
-table(merged_seurat_harmony@meta.data$genotype)
-dnmt3a_45_1_seurat <- subset(x = merged_seurat_harmony, subset = genotype == "dnmt3a_45_1")
-#Quick chek if subsetting was done correctly 
-#table(dnmt3a_45_1_seurat@meta.data$genotype)
-dnmt3a_45_2_seurat <- subset(x = merged_seurat_harmony, subset = genotype == "dnmt3a_45_2")
-tet2_45_1_seurat <- subset(x = merged_seurat_harmony, subset = genotype == "tet2_45_1")
-tet2_45_2_seurat <- subset(x = merged_seurat_harmony, subset = genotype == "tet2_45_2")
-wt_45_1_seurat <- subset(x = merged_seurat_harmony, subset = genotype == "wt_45_1")
 rm(bcmvn,merged_seurat_doublets,merged_seurat_harmony,metadata_cells,sweep.stats,sweep.list)
 save.image(paste0(rdaDir,"seurat_objs_genotypes_noidents.rda")) #Can directly load this into the scenic pipeline to run scenic
 ```
 
 ```{r}
 #Idents(dnmt3a_45_1_seurat)
+```
+```{r}
+table(merged_seurat_harmony@meta.data$genotype_clusters)
+```
+
+```{r}
+table(merged_seurat_harmony@meta.data$seurat_clusters)
+```
+
+```{r}
+table(merged_seurat_harmony@meta.data$genotype_clusters_ind)
+```
+
+##Subsetting the seurat object such that it has all the highly variable genes and all the TFs 
+```{r}
+merged_seurat_harmony <- subset(merged_seurat_harmony,features = var_genes)
+dim(merged_seurat_harmony)
+```
+```{r}
+merged_seurat_harmony@assays
 ```
 
 
@@ -554,8 +645,31 @@ save.image(paste0(rdaDir,"seurat_objs_genotypes_noidents.rda")) #Can directly lo
 ##Convert seurat object to anndata object 
 library(Seurat)
 library(SeuratDisk)
-#Convert into s3 object c
+#Convert into s3 object 
 merged_seurat_harmony[["RNA"]] <- as(merged_seurat_harmony[["RNA"]], "Assay")
 SaveH5Seurat(merged_seurat_harmony, filename = "merged_seurat.h5Seurat")
 Convert("merged_seurat.h5Seurat", dest = "h5ad")
 ```
+
+
+
+```{r}
+library(reticulate)
+#devtools::install_github("cellgeni/sceasy")
+library(sceasy)
+use_condaenv('pyscenic_env')
+merged_seurat_harmony[["RNA"]] <- as(merged_seurat_harmony[["RNA"]], "Assay")
+sceasy::convertFormat(merged_seurat_harmony, from="seurat", to="anndata",
+                       outFile='merged_seurat.h5ad')
+```
+
+
+
+
+```{r}
+library(SCP)
+adata <- srt_to_adata(merged_seurat_harmony)
+adata$write_h5ad("merged_seurat.h5ad")
+```
+
+
