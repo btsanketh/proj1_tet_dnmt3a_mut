@@ -184,6 +184,7 @@ features <- rownames(merged_seurat_harmony)
 variance_genes <- cbind(features,gene_var) %>%
                   rename(variance = value)
 
+variance_genes <- VariableFeatures(merged_seurat_harmony)
 
 data(list = "motifAnnotations_mgi_v9" ,package = "RcisTarget")
 
@@ -632,6 +633,11 @@ table(merged_seurat_harmony@meta.data$genotype_clusters_ind)
 
 ##Subsetting the seurat object such that it has all the highly variable genes and all the TFs 
 ```{r}
+variance_genes <- VariableFeatures(merged_seurat_harmony)
+data(list = "motifAnnotations_mgi_v9" ,package = "RcisTarget")
+tfs <- unique(motifAnnotations_mgi_v9$TF)
+tfs <- setdiff(tfs,variance_genes)
+var_genes <- c(variance_genes,tfs)
 merged_seurat_harmony <- subset(merged_seurat_harmony,features = var_genes)
 dim(merged_seurat_harmony)
 ```
@@ -661,6 +667,9 @@ use_condaenv('pyscenic_env')
 merged_seurat_harmony[["RNA"]] <- as(merged_seurat_harmony[["RNA"]], "Assay")
 sceasy::convertFormat(merged_seurat_harmony, from="seurat", to="anndata",
                        outFile='merged_seurat.h5ad')
+```
+```{r}
+check_genes <- VariableFeatures(merged_seurat_doublets)
 ```
 
 
